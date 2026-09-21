@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Demo Lightweight Charts</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lightweight-charts/4.1.3/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0e0f13;
+    --panel: #14161c;
+    --text: #e6e8ee;
+    --muted: #8a8f9c;
+    --accent: #4f8cff;
+    --up: #26a69a;
+    --down: #ef5350;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  header {
+    padding: 16px 20px 8px;
+  }
+  h1 {
+    font-size: 18px;
+    margin: 0 0 4px;
+    font-weight: 600;
+  }
+  p.sub {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  #controls {
+    display: flex;
+    gap: 8px;
+    padding: 12px 20px;
+    flex-wrap: wrap;
+  }
+  button {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid #262a33;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #chart-container {
+    width: 100%;
+    height: 480px;
+    padding: 0 20px 20px;
+  }
+  #chart {
+    width: 100%;
+    height: 100%;
+    background: var(--panel);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  #legend {
+    padding: 0 20px 20px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Lightweight Charts + OANDA</h1>
+  <p class="sub">Chandeliers réels via ton proxy local + indicateur SMA custom en JS</p>
+</header>
+
+<div id="controls">
+  <button id="sma-toggle" class="active">SMA (20)</button>
+  <button id="regen">Rafraîchir</button>
+</div>
+
+<div id="chart-container"><div id="chart"></div></div>
+<div id="legend">EUR_USD M5 — données OANDA via proxy local (localhost:8000).</div>
+
+<script>
+  const chartEl = document.getElementById('chart');
+  const chart = LightweightCharts.createChart(chartEl, {
+    layout: {
+      background: { type: 'solid', color: '#14161c' },
+      textColor: '#8a8f9c',
+    },
+    grid: {
+      vertLines: { color: '#1c1f27' },
+      horzLines: { color: '#1c1f27' },
+    },
+    timeScale: { borderColor: '#262a33', timeVisible: true },
+    rightPriceScale: { borderColor: '#262a33' },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: '#26a69a',
+    downColor: '#ef5350',
+    borderVisible: false,
+    wickUpColor: '#26a69a',
+    wickDownColor: '#ef5350',
+  });
+
+  const smaSeries = chart.addLineSeries({
+    color: '#4f8cff',
+    lineWidth: 2,
+  });
+
+  // --- Récupération des données réelles via le proxy local (oanda_proxy.py) ---
+  const PROXY_URL = "http://localhost:8000/candles";
+  const INSTRUMENT = "EUR_USD";
+  const GRANULARITY = "M5";
+
+  async function fetchCandles() {
+    const url = `${PROXY_URL}?instrument=${INSTRUMENT}&granularity=${GRANULARITY}&count=200`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) {
+      throw new Error(`Erreur proxy OANDA: ${res.status}`);
+    }
+    return res.json();
+  }
+
+  // --- Repli : données de démo générées en JS si le proxy local n'est pas joignable ---
+  // (c'est le cas par défaut sur une page publiée en ligne, ex: GitHub Pages)
+  function generateDemoCandles(n = 200) {
+    const data = [];
+    let time = Math.floor(Date.now() / 1000) - n * 300; // pas de 5 minutes (M5)
+    let price = 1.0850;
+    for (let i = 0; i < n; i++) {
+      const open = price;
+      const change = (Math.random() - 0.5) * 0.0015;
+      const close = open + change;
+      const high = Math.max(open, close) + Math.random() * 0.0005;
+      const low = Math.min(open, close) - Math.random() * 0.0005;
+      data.push({ time, open, high, low, close });
+      price = close;
+      time += 300;
+    }
+    return data;
+  }
+
+  // --- Indicateur custom en JS : moyenne mobile simple ---
+  function computeSMA(candles, period = 20) {
+    const result = [];
+    for (let i = period - 1; i < candles.length; i++) {
+      let sum = 0;
+      for (let j = i - period + 1; j <= i; j++) sum += candles[j].close;
+      result.push({ time: candles[i].time, value: sum / period });
+    }
+    return result;
+  }
+
+  let candles = [];
+
+  async function render() {
+    const legend = document.getElementById('legend');
+    try {
+      candles = await fetchCandles();
+      legend.textContent = "EUR_USD M5 — données réelles via proxy OANDA local (localhost:8000).";
+    } catch (err) {
+      candles = generateDemoCandles();
+      legend.textContent = "Mode démo — données factices (le proxy OANDA local n'est pas joignable depuis cette page).";
+      console.warn("Proxy OANDA indisponible, bascule en mode démo:", err.message);
+    }
+    candleSeries.setData(candles);
+    smaSeries.setData(computeSMA(candles, 20));
+    chart.timeScale().fitContent();
+  }
+
+  render();
+
+  document.getElementById('regen').addEventListener('click', render);
+
+  const smaToggle = document.getElementById('sma-toggle');
+  let smaVisible = true;
+  smaToggle.addEventListener('click', () => {
+    smaVisible = !smaVisible;
+    smaSeries.applyOptions({ visible: smaVisible });
+    smaToggle.classList.toggle('active', smaVisible);
+  });
+
+  new ResizeObserver(entries => {
+    for (const entry of entries) {
+      chart.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height });
+    }
+  }).observe(chartEl);
+</script>
+
+</body>
+</html>
